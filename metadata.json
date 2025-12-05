@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Virtual Studio - AI Image Editor",
+  "description": "An AI-powered image editor that allows users to modify images using text prompts. Upload an image, describe your desired changes, and let Gemini generate a new version.",
+  "requestFramePermissions": []
+}
