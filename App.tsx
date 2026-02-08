@@ -1,403 +1,580 @@
+import React, { useMemo, useState } from 'react';
 
-import React, { useState, useCallback } from 'react';
-import { Header } from './components/Header';
-import { InputPanel } from './components/InputPanel';
-import { ImageDisplay } from './components/ImageDisplay';
-import { RightPanel } from './components/RightPanel';
-import { generateImageFromParts } from './services/geminiService';
-import { fileToGenerativePart, base64UrlToGenerativePart } from './utils/fileUtils';
-import type { FileDetails, Settings, ProductSettings, Page } from './types';
+type PaymentMethod = 'GPay' | 'PhonePe' | 'Cash';
 
-// Export Page type so it can be used in other files
-export type { Page };
-
-const defaultSettings: Settings = {
-  aspectRatio: '3:4',
-  numImages: 1,
-  resolution: '1K',
-  ecommercePack: 'Off',
-  socialMediaPack: false,
-  completeAssetPack: false,
-  hyperRealism: false,
-  cinematicLook: false,
-  colorGrade: 'None',
-  analogCamera: 'None',
-  lightingAndMood: 'None',
-  backgroundSetDesign: 'None',
-  poseCategory: 'Womens',
-  selectedPose: null,
-  prompt: '',
+type Expense = {
+  id: string;
+  title: string;
+  category: string;
+  amount: number;
+  method: PaymentMethod;
+  date: string;
+  note?: string;
 };
 
-const defaultProductSettings: ProductSettings = {
-  aspectRatio: '3:4',
-  numImages: 4,
-  resolution: '1K',
-  ecommercePack: 'Off',
-  hyperRealism: true,
-  cinematicLook: true,
-  colorGrade: 'Cinematic Teal & Orange',
-  analogCamera: 'None',
-  lightingAndMood: 'None',
-  backgroundSetDesign: 'None',
-  jewelScale: 'Medium',
-  prompt: '',
-};
+const paymentMethods: PaymentMethod[] = ['GPay', 'PhonePe', 'Cash'];
+const categories = ['Groceries', 'Transport', 'Bills', 'Food', 'Shopping', 'Health', 'Other'];
 
+const initialExpenses: Expense[] = [
+  {
+    id: 'exp-1001',
+    title: 'Monthly groceries',
+    category: 'Groceries',
+    amount: 2450,
+    method: 'GPay',
+    date: '2024-06-02',
+    note: 'BigBasket order',
+  },
+  {
+    id: 'exp-1002',
+    title: 'Metro card top-up',
+    category: 'Transport',
+    amount: 350,
+    method: 'PhonePe',
+    date: '2024-06-04',
+  },
+  {
+    id: 'exp-1003',
+    title: 'Clinic visit',
+    category: 'Health',
+    amount: 800,
+    method: 'Cash',
+    date: '2024-06-06',
+  },
+  {
+    id: 'exp-1004',
+    title: 'Electricity bill',
+    category: 'Bills',
+    amount: 1265,
+    method: 'GPay',
+    date: '2024-06-08',
+  },
+];
+
+const gpayImportSamples: Expense[] = [
+  {
+    id: 'gpay-2001',
+    title: 'Cafe latte',
+    category: 'Food',
+    amount: 190,
+    method: 'GPay',
+    date: '2024-06-10',
+    note: 'Auto-imported from GPay',
+  },
+  {
+    id: 'gpay-2002',
+    title: 'Ride share',
+    category: 'Transport',
+    amount: 420,
+    method: 'GPay',
+    date: '2024-06-11',
+    note: 'Auto-imported from GPay',
+  },
+  {
+    id: 'gpay-2003',
+    title: 'Mobile recharge',
+    category: 'Bills',
+    amount: 299,
+    method: 'GPay',
+    date: '2024-06-12',
+    note: 'Auto-imported from GPay',
+  },
+];
+
+const formatCurrency = (amount: number) =>
+  new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 0,
+  }).format(amount);
+
+type Page = 'login' | 'dashboard';
 
 export default function App(): React.JSX.Element {
-  // Apparel Page State
-  const [modelImage, setModelImage] = useState<FileDetails | null>(null);
-  const [apparelImages, setApparelImages] = useState<FileDetails[]>([]);
-  const [apparelSettings, setApparelSettings] = useState<Settings>(defaultSettings);
-  const [generatedApparelImages, setGeneratedApparelImages] = useState<string[]>([]);
-  const [activeApparelImageIndex, setActiveApparelImageIndex] = useState<number>(0);
+  const [activePage, setActivePage] = useState<Page>('login');
+  const [expenses, setExpenses] = useState<Expense[]>(initialExpenses);
+  const [search, setSearch] = useState('');
+  const [methodFilter, setMethodFilter] = useState<PaymentMethod | 'All'>('All');
+  const [categoryFilter, setCategoryFilter] = useState('All');
+  const [isImporting, setIsImporting] = useState(false);
+  const [lastSyncLabel, setLastSyncLabel] = useState<string | null>(null);
+  const [formState, setFormState] = useState({
+    title: '',
+    category: categories[0],
+    amount: '',
+    method: 'GPay' as PaymentMethod,
+    date: new Date().toISOString().split('T')[0],
+    note: '',
+  });
 
-  // Product Page State
-  const [productImage, setProductImage] = useState<FileDetails | null>(null);
-  const [productSettings, setProductSettings] = useState<ProductSettings>(defaultProductSettings);
-  const [generatedProductImages, setGeneratedProductImages] = useState<string[]>([]);
-  const [activeProductImageIndex, setActiveProductImageIndex] = useState<number>(0);
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((expense) => {
+      const matchesSearch = expense.title.toLowerCase().includes(search.toLowerCase());
+      const matchesMethod = methodFilter === 'All' || expense.method === methodFilter;
+      const matchesCategory = categoryFilter === 'All' || expense.category === categoryFilter;
+      return matchesSearch && matchesMethod && matchesCategory;
+    });
+  }, [expenses, search, methodFilter, categoryFilter]);
 
-  // Common State
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [activePage, setActivePage] = useState<Page>('Product');
+  const totalSpent = useMemo(
+    () => filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0),
+    [filteredExpenses]
+  );
 
-  const handleImageUpload = (file: File, type: 'model' | 'apparel' | 'product') => {
-    const details = { file, URL: URL.createObjectURL(file) };
-    if (type === 'model') {
-      setModelImage(details);
-    } else if (type === 'apparel') {
-      setApparelImages(prev => [...prev, details]);
-    } else if (type === 'product') {
-      setProductImage(details);
-    }
-    
-    if (type !== 'apparel') {
-        setGeneratedApparelImages([]);
-        setActiveApparelImageIndex(0);
-        setGeneratedProductImages([]);
-        setActiveProductImageIndex(0);
-        setError(null);
-    }
-  };
-  
-  const handleImageRemove = (type: 'model' | 'apparel' | 'product', index?: number) => {
-    if (type === 'model') {
-      setModelImage(null);
-    } else if (type === 'apparel') {
-      if (typeof index === 'number') {
-        setApparelImages(prev => prev.filter((_, i) => i !== index));
-      } else {
-        setApparelImages([]);
-      }
-    } else if (type === 'product') {
-        setProductImage(null);
-    }
-    setError(null);
+  const spendingByMethod = useMemo(() => {
+    return paymentMethods.map((method) => ({
+      method,
+      total: expenses
+        .filter((expense) => expense.method === method)
+        .reduce((sum, expense) => sum + expense.amount, 0),
+    }));
+  }, [expenses]);
+
+  const handleFormChange = (field: string, value: string) => {
+    setFormState((prev) => ({ ...prev, [field]: value }));
   };
 
-  const buildApparelPrompt = (): string => {
-    let promptParts: string[] = [`A ${apparelSettings.poseCategory.toLowerCase()} fashion photoshoot of the model wearing the apparel.`];
-    if (apparelSettings.socialMediaPack) promptParts.push("Styled for a social media lifestyle shot.");
-    if (apparelSettings.completeAssetPack) promptParts.push("Part of a complete asset pack, showing various angles and styles.");
-    if (apparelSettings.ecommercePack !== 'Off') promptParts.push(`An e-commerce shot in '${apparelSettings.ecommercePack}' style.`);
-    
-    // Creative Controls
-    if (apparelSettings.hyperRealism) promptParts.push("with hyper realism");
-    if (apparelSettings.cinematicLook) promptParts.push("in a cinematic look");
-    if (apparelSettings.colorGrade !== 'None') promptParts.push(`with ${apparelSettings.colorGrade.toLowerCase()} color grading`);
-    if (apparelSettings.analogCamera !== 'None') promptParts.push(`in ${apparelSettings.analogCamera} style`);
-    if (apparelSettings.lightingAndMood !== 'None') promptParts.push(`with ${apparelSettings.lightingAndMood}`);
-    if (apparelSettings.backgroundSetDesign !== 'None') promptParts.push(`set against a ${apparelSettings.backgroundSetDesign}`);
-    
-    if (apparelSettings.selectedPose && apparelSettings.selectedPose !== 'None') {
-        promptParts.push(`Model is posing in a ${apparelSettings.selectedPose} stance.`);
+  const handleAddExpense = (event: React.FormEvent) => {
+    event.preventDefault();
+    const amountNumber = Number(formState.amount);
+    if (!formState.title.trim() || Number.isNaN(amountNumber) || amountNumber <= 0) {
+      return;
     }
 
-    // Aspect ratio is now handled by imageConfig
-    
-    let basePrompt = promptParts.join(" ") + ".";
-    if (apparelSettings.prompt.trim()) {
-        basePrompt += ` Additional instructions: ${apparelSettings.prompt.trim()}`;
-    }
-    return basePrompt;
+    const newExpense: Expense = {
+      id: `exp-${Date.now()}`,
+      title: formState.title.trim(),
+      category: formState.category,
+      amount: amountNumber,
+      method: formState.method,
+      date: formState.date,
+      note: formState.note.trim() || undefined,
+    };
+
+    setExpenses((prev) => [newExpense, ...prev]);
+    setFormState((prev) => ({
+      ...prev,
+      title: '',
+      amount: '',
+      note: '',
+      date: new Date().toISOString().split('T')[0],
+    }));
   };
 
-  const buildProductPrompt = (): string => {
-    let basePrompt = productSettings.prompt.trim();
-    if (!basePrompt) {
-        basePrompt = "A photorealistic product shot of the item in the image on a clean white background.";
-    }
-
-    const styleParts: string[] = [];
-    if (productSettings.ecommercePack !== 'Off') styleParts.push(`e-commerce style: ${productSettings.ecommercePack}`);
-    if (productSettings.hyperRealism) styleParts.push("hyper-realistic");
-    if (productSettings.cinematicLook) styleParts.push("cinematic look");
-    if (productSettings.colorGrade !== 'None') styleParts.push(`color grade: ${productSettings.colorGrade}`);
-    if (productSettings.analogCamera !== 'None') styleParts.push(`analog aesthetic: ${productSettings.analogCamera}`);
-    if (productSettings.lightingAndMood !== 'None') styleParts.push(`lighting: ${productSettings.lightingAndMood}`);
-    if (productSettings.backgroundSetDesign !== 'None') styleParts.push(`background: ${productSettings.backgroundSetDesign}`);
-    styleParts.push(`product scale: ${productSettings.jewelScale}`);
-    // Aspect ratio is now handled by imageConfig
-
-    if (styleParts.length > 0) {
-      return `${basePrompt}. Apply the following styles: ${styleParts.join(', ')}.`;
-    }
-    
-    return basePrompt;
+  const handleImportGpay = () => {
+    if (isImporting) return;
+    setIsImporting(true);
+    setTimeout(() => {
+      setExpenses((prev) => {
+        const existingIds = new Set(prev.map((expense) => expense.id));
+        const newItems = gpayImportSamples.filter((expense) => !existingIds.has(expense.id));
+        return [...newItems, ...prev];
+      });
+      setLastSyncLabel(new Date().toLocaleString());
+      setIsImporting(false);
+    }, 700);
   };
-
-
-  const handleGenerateClick = useCallback(async () => {
-    if (isLoading) return;
-    setIsLoading(true);
-    setError(null);
-
-    // Determine settings and model based on resolution
-    const currentSettings = activePage === 'Apparel' ? apparelSettings : productSettings;
-    const isProModel = currentSettings.resolution === '2K' || currentSettings.resolution === '4K';
-    const model = isProModel ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-
-    // Check API Key for Pro model
-    if (isProModel) {
-         // @ts-ignore
-         if (window.aistudio && window.aistudio.hasSelectedApiKey && window.aistudio.openSelectKey) {
-             // @ts-ignore
-             const hasKey = await window.aistudio.hasSelectedApiKey();
-             if (!hasKey) {
-                 try {
-                    // @ts-ignore
-                    await window.aistudio.openSelectKey();
-                 } catch (e) {
-                     console.error("Failed to select API key", e);
-                     setError("API Key selection failed. Please try again.");
-                     setIsLoading(false);
-                     return;
-                 }
-             }
-         }
-    }
-
-    if (activePage === 'Apparel') {
-      if (!modelImage || apparelImages.length === 0) {
-        setError('Please upload a model and at least one apparel item to generate an image.');
-        setIsLoading(false);
-        return;
-      }
-      setGeneratedApparelImages([]);
-      setActiveApparelImageIndex(0);
-      try {
-        const modelPart = await fileToGenerativePart(modelImage.file);
-        
-        const apparelParts = await Promise.all(apparelImages.map(img => fileToGenerativePart(img.file)));
-        const prompt = buildApparelPrompt();
-        
-        const newImages: string[] = [];
-        // Execute sequentially to avoid rate limits
-        for (let i = 0; i < apparelSettings.numImages; i++) {
-             if (i > 0) await new Promise(r => setTimeout(r, 5000)); // Throttle
-             const result = await generateImageFromParts(
-                 [modelPart, ...apparelParts, {text: `${prompt} (Variation ${i + 1})`}],
-                 { model, resolution: apparelSettings.resolution, aspectRatio: apparelSettings.aspectRatio }
-             );
-             if (result) newImages.push(result);
-        }
-
-        if (newImages.length > 0) setGeneratedApparelImages(newImages);
-        else setError('Failed to generate images. The result was empty.');
-      } catch (e) {
-        console.error(e);
-        setError(e instanceof Error ? e.message : 'An unknown error occurred.');
-      }
-    } else if (activePage === 'Product') {
-      if (!productImage) {
-        setError('Please upload a product to generate an image.');
-        setIsLoading(false);
-        return;
-      }
-       if (!productSettings.prompt.trim()) {
-        setError('Please enter a prompt describing the scene.');
-        setIsLoading(false);
-        return;
-      }
-      setGeneratedProductImages([]);
-      setActiveProductImageIndex(0);
-       try {
-        const productPart = await fileToGenerativePart(productImage.file);
-        const prompt = buildProductPrompt();
-
-        const newImages: string[] = [];
-        // Execute sequentially to avoid rate limits
-        for (let i = 0; i < productSettings.numImages; i++) {
-            if (i > 0) await new Promise(r => setTimeout(r, 5000)); // Throttle
-            const result = await generateImageFromParts(
-                [productPart, { text: `${prompt} (Variation ${i + 1})`}],
-                { model, resolution: productSettings.resolution, aspectRatio: productSettings.aspectRatio }
-            );
-            if (result) newImages.push(result);
-        }
-
-        if (newImages.length > 0) setGeneratedProductImages(newImages);
-        else setError('Failed to generate images. The result was empty.');
-      } catch (e) {
-        console.error(e);
-        setError(e instanceof Error ? e.message : 'An unknown error occurred.');
-      }
-    }
-    setIsLoading(false);
-  }, [activePage, modelImage, apparelImages, apparelSettings, productImage, productSettings, isLoading]);
-  
-  const handleUpscaleClick = useCallback(async (page: Page) => {
-    if (isLoading) return;
-    const images = page === 'Apparel' ? generatedApparelImages : generatedProductImages;
-    const activeIndex = page === 'Apparel' ? activeApparelImageIndex : activeProductImageIndex;
-    const currentSettings = page === 'Apparel' ? apparelSettings : productSettings;
-
-    if (images.length === 0 || activeIndex < 0 || activeIndex >= images.length) {
-        setError("No valid image selected to upscale.");
-        return;
-    }
-    setIsLoading(true);
-    setError(null);
-    try {
-        const imageToUpscaleUrl = images[activeIndex];
-        const imagePart = base64UrlToGenerativePart(imageToUpscaleUrl);
-        const prompt = "Please upscale this image. Increase the resolution and enhance the details, making it sharper and clearer, while preserving the original content and artistic style.";
-        
-        const isProModel = currentSettings.resolution === '2K' || currentSettings.resolution === '4K';
-        const model = isProModel ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-
-        const result = await generateImageFromParts(
-            [imagePart, {text: prompt}],
-            { model, resolution: currentSettings.resolution, aspectRatio: currentSettings.aspectRatio }
-        );
-        if (result) {
-            const newImages = [...images];
-            newImages[activeIndex] = result;
-            if (page === 'Apparel') setGeneratedApparelImages(newImages);
-            else setGeneratedProductImages(newImages);
-        } else {
-            setError('Failed to upscale the image. The result was empty.');
-        }
-    } catch (e) {
-        console.error(e);
-        setError(e instanceof Error ? e.message : 'An unknown error occurred.');
-    } finally {
-        setIsLoading(false);
-    }
-  }, [generatedApparelImages, activeApparelImageIndex, generatedProductImages, activeProductImageIndex, isLoading, apparelSettings, productSettings]);
-
-  const handleApplyEdit = useCallback(async (prompt: string, page: Page) => {
-    if (isLoading) return;
-    const images = page === 'Apparel' ? generatedApparelImages : generatedProductImages;
-    const activeIndex = page === 'Apparel' ? activeApparelImageIndex : activeProductImageIndex;
-    const currentSettings = page === 'Apparel' ? apparelSettings : productSettings;
-
-    if (images.length === 0 || activeIndex < 0 || activeIndex >= images.length) {
-        setError("No valid image selected to edit.");
-        return;
-    }
-    setIsLoading(true);
-    setError(null);
-    try {
-        const imageToEditUrl = images[activeIndex];
-        const imagePart = base64UrlToGenerativePart(imageToEditUrl);
-        
-        const isProModel = currentSettings.resolution === '2K' || currentSettings.resolution === '4K';
-        const model = isProModel ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-
-        const result = await generateImageFromParts(
-            [imagePart, {text: prompt}],
-            { model, resolution: currentSettings.resolution, aspectRatio: currentSettings.aspectRatio }
-        );
-        if (result) {
-            const newImages = [...images];
-            newImages[activeIndex] = result;
-            if (page === 'Apparel') setGeneratedApparelImages(newImages);
-            else setGeneratedProductImages(newImages);
-        } else {
-            setError('Failed to edit the image. The result was empty.');
-        }
-    } catch (e) {
-        console.error(e);
-        setError(e instanceof Error ? e.message : 'An unknown error occurred.');
-    } finally {
-        setIsLoading(false);
-    }
-  }, [generatedApparelImages, activeApparelImageIndex, generatedProductImages, activeProductImageIndex, isLoading, apparelSettings, productSettings]);
 
   return (
-    <div className="min-h-screen bg-[#0f1014] text-gray-200 flex flex-col">
-      <Header 
-        onGenerate={handleGenerateClick} 
-        activePage={activePage}
-        onNavClick={(page) => { setActivePage(page); setError(null); }}
-        isLoading={isLoading}
-      />
-      <main className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 lg:h-[calc(100vh-64px)]">
-        {activePage === 'Apparel' ? (
-            <>
-              <div className="lg:col-span-3 bg-[#1e1f24] rounded-lg p-4 flex flex-col lg:h-full lg:overflow-y-auto">
-                <InputPanel
-                  page="Apparel"
-                  onImageUpload={handleImageUpload}
-                  onImageRemove={(type, index) => handleImageRemove(type, index)}
-                  modelImage={modelImage}
-                  apparelImages={apparelImages}
-                  settings={apparelSettings}
-                  setSettings={setApparelSettings}
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
+      <header className="border-b border-slate-800/80 bg-gradient-to-r from-emerald-500/10 via-slate-900/80 to-slate-950">
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-8 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm uppercase tracking-[0.3em] text-emerald-300/80">Personal Expense Tracker</p>
+            <h1 className="mt-2 text-3xl font-semibold">All payments in one timeline</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Track GPay, PhonePe, and cash expenses with clear history, totals, and filters.
+            </p>
+          </div>
+          <div className="grid w-full max-w-sm grid-cols-2 gap-3 rounded-2xl border border-emerald-500/20 bg-slate-900/70 p-4 text-sm">
+            <div>
+              <p className="text-xs uppercase text-slate-400">Total spent</p>
+              <p className="mt-1 text-lg font-semibold text-emerald-200">{formatCurrency(totalSpent)}</p>
+            </div>
+            <div>
+              <p className="text-xs uppercase text-slate-400">Entries</p>
+              <p className="mt-1 text-lg font-semibold">{filteredExpenses.length}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setActivePage('login')}
+              className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                activePage === 'login'
+                  ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                  : 'border-slate-800/80 text-slate-300 hover:border-slate-500/60'
+              }`}
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivePage('dashboard')}
+              className={`rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                activePage === 'dashboard'
+                  ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200'
+                  : 'border-slate-800/80 text-slate-300 hover:border-slate-500/60'
+              }`}
+            >
+              Dashboard
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {activePage === 'login' ? (
+        <main className="mx-auto grid max-w-6xl gap-6 px-6 py-12 lg:grid-cols-[1.1fr_0.9fr]">
+          <section className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-8">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-300/80">Welcome back</p>
+            <h2 className="mt-2 text-2xl font-semibold">Sign in to your expense tracker</h2>
+            <p className="mt-3 text-sm text-slate-300">
+              Access your dashboard, sync GPay history, and keep everything in one place.
+            </p>
+            <form className="mt-6 space-y-4">
+              <div>
+                <label className="text-xs uppercase text-slate-400">Email</label>
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
                 />
               </div>
-              <div className="order-first lg:order-none lg:col-span-6 bg-[#1e1f24] rounded-lg p-4 flex flex-col lg:h-full lg:overflow-hidden">
-                <ImageDisplay
-                  page="Apparel"
-                  generatedImages={generatedApparelImages}
-                  activeImageIndex={activeApparelImageIndex}
-                  setActiveImageIndex={setActiveApparelImageIndex}
-                  isLoading={isLoading}
-                  error={error}
-                  hasUploadedContent={!!modelImage && apparelImages.length > 0}
-                  onApplyEdit={(prompt) => handleApplyEdit(prompt, 'Apparel')}
-                  onUpscale={() => handleUpscaleClick('Apparel')}
+              <div>
+                <label className="text-xs uppercase text-slate-400">Password</label>
+                <input
+                  type="password"
+                  placeholder="Enter your password"
+                  className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
                 />
               </div>
-              <div className="lg:col-span-3 bg-[#1e1f24] rounded-lg flex flex-col lg:h-full lg:overflow-y-auto">
-                 <RightPanel page="Apparel" settings={apparelSettings} setSettings={setApparelSettings} />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="lg:col-span-3 bg-[#1e1f24] rounded-lg p-4 flex flex-col lg:h-full lg:overflow-y-auto">
-                <InputPanel
-                  page="Product"
-                  onImageUpload={handleImageUpload}
-                  onImageRemove={(type) => handleImageRemove(type)}
-                  productImage={productImage}
-                  settings={productSettings}
-                  setSettings={setProductSettings}
+              <button
+                type="button"
+                onClick={() => setActivePage('dashboard')}
+                className="w-full rounded-xl bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+              >
+                Login to dashboard
+              </button>
+            </form>
+          </section>
+          <aside className="space-y-6">
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">
+                New here?
+              </h3>
+              <p className="mt-3 text-sm text-slate-300">
+                Register once to keep all your expenses safe, synced, and ready to review anytime.
+              </p>
+              <button
+                type="button"
+                onClick={() => setActivePage('dashboard')}
+                className="mt-5 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-slate-500/60"
+              >
+                Continue to register
+              </button>
+            </div>
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">
+                Why sign in?
+              </h3>
+              <ul className="mt-4 space-y-3 text-sm text-slate-300">
+                <li>Sync GPay transactions with one click.</li>
+                <li>Store cash notes and receipts securely.</li>
+                <li>Review monthly totals and payment mix.</li>
+              </ul>
+            </div>
+          </aside>
+        </main>
+      ) : (
+        <main className="mx-auto grid max-w-6xl gap-6 px-6 py-8 lg:grid-cols-[1.2fr_0.8fr]">
+          <section className="space-y-6">
+            <div className="grid gap-4 rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6 md:grid-cols-3">
+              <div className="md:col-span-2">
+                <label className="text-xs uppercase text-slate-400">Search expenses</label>
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search by title"
+                  className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm text-white placeholder:text-slate-500"
                 />
               </div>
-              <div className="order-first lg:order-none lg:col-span-6 bg-[#1e1f24] rounded-lg p-4 flex flex-col lg:h-full lg:overflow-hidden">
-                <ImageDisplay
-                  page="Product"
-                  generatedImages={generatedProductImages}
-                  activeImageIndex={activeProductImageIndex}
-                  setActiveImageIndex={setActiveProductImageIndex}
-                  isLoading={isLoading}
-                  error={error}
-                  hasUploadedContent={!!productImage}
-                  onApplyEdit={(prompt) => handleApplyEdit(prompt, 'Product')}
-                  onUpscale={() => handleUpscaleClick('Product')}
-                />
+              <div className="md:col-span-3">
+                <div className="flex flex-col gap-3 rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs uppercase text-slate-400">Auto-import from GPay</p>
+                    <p className="mt-1 text-sm text-slate-300">
+                      Sync recent GPay payments and add them to your history automatically.
+                    </p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {lastSyncLabel ? `Last synced: ${lastSyncLabel}` : 'Not synced yet.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleImportGpay}
+                    disabled={isImporting}
+                    className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                      isImporting
+                        ? 'cursor-not-allowed bg-indigo-500/30 text-indigo-200/70'
+                        : 'bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 text-white hover:opacity-90'
+                    }`}
+                  >
+                    {isImporting ? 'Syncing…' : 'Sync GPay history'}
+                  </button>
+                </div>
               </div>
-              <div className="lg:col-span-3 bg-[#1e1f24] rounded-lg flex flex-col lg:h-full lg:overflow-y-auto">
-                 <RightPanel page="Product" settings={productSettings} setSettings={setProductSettings} />
+              <div>
+                <label className="text-xs uppercase text-slate-400">Method</label>
+                <select
+                  value={methodFilter}
+                  onChange={(event) => setMethodFilter(event.target.value as PaymentMethod | 'All')}
+                  className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                >
+                  <option value="All">All methods</option>
+                  {paymentMethods.map((method) => (
+                    <option key={method} value={method}>
+                      {method}
+                    </option>
+                  ))}
+                </select>
               </div>
-            </>
-          )}
-      </main>
+              <div>
+                <label className="text-xs uppercase text-slate-400">Category</label>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                >
+                  <option value="All">All categories</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <div className="rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3">
+                  <p className="text-xs uppercase text-slate-400">Payment mix</p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-3">
+                    {spendingByMethod.map((item) => (
+                      <div
+                        key={item.method}
+                        className="rounded-lg border border-slate-800/80 bg-slate-900/70 px-3 py-2"
+                      >
+                        <p className="text-xs text-slate-400">{item.method}</p>
+                        <p className="text-base font-semibold text-emerald-200">
+                          {formatCurrency(item.total)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Payment history</h2>
+                <p className="text-xs text-slate-400">Newest first</p>
+              </div>
+              <div className="mt-4 space-y-4">
+                {filteredExpenses.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-800/80 bg-slate-950/80 p-6 text-sm text-slate-400">
+                    No expenses found. Add a new payment to get started.
+                  </div>
+                ) : (
+                  filteredExpenses.map((expense) => (
+                    <div
+                      key={expense.id}
+                      className="flex flex-col gap-3 rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-4 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <p className="text-base font-semibold">{expense.title}</p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          {expense.category} • {expense.method} • {expense.date}
+                        </p>
+                        {expense.note ? (
+                          <p className="mt-2 text-xs text-slate-500">{expense.note}</p>
+                        ) : null}
+                      </div>
+                      <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200">
+                        {formatCurrency(expense.amount)}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
+
+          <aside className="space-y-6">
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <h2 className="text-lg font-semibold">User registration</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Save your profile to keep expense history tied to your account.
+              </p>
+              <form className="mt-4 space-y-4">
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Full name</label>
+                  <input
+                    type="text"
+                    placeholder="Enter your name"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Phone number</label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. +91 98765 43210"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Email</label>
+                  <input
+                    type="email"
+                    placeholder="you@example.com"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Password</label>
+                  <input
+                    type="password"
+                    placeholder="Create a password"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full rounded-xl bg-gradient-to-r from-indigo-500 via-sky-500 to-emerald-500 px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                >
+                  Create account
+                </button>
+              </form>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <h2 className="text-lg font-semibold">Add new expense</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Log every payment from GPay, PhonePe, or cash in seconds.
+              </p>
+              <form onSubmit={handleAddExpense} className="mt-4 space-y-4">
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Title</label>
+                  <input
+                    value={formState.title}
+                    onChange={(event) => handleFormChange('title', event.target.value)}
+                    placeholder="Eg. Grocery run"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Amount</label>
+                  <input
+                    type="number"
+                    value={formState.amount}
+                    onChange={(event) => handleFormChange('amount', event.target.value)}
+                    placeholder="0"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Category</label>
+                  <select
+                    value={formState.category}
+                    onChange={(event) => handleFormChange('category', event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  >
+                    {categories.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Payment method</label>
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    {paymentMethods.map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => handleFormChange('method', method)}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                          formState.method === method
+                            ? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-200'
+                            : 'border-slate-800/80 bg-slate-950/80 text-slate-300 hover:border-slate-500/60'
+                        }`}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Date</label>
+                  <input
+                    type="date"
+                    value={formState.date}
+                    onChange={(event) => handleFormChange('date', event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs uppercase text-slate-400">Note (optional)</label>
+                  <textarea
+                    value={formState.note}
+                    onChange={(event) => handleFormChange('note', event.target.value)}
+                    rows={3}
+                    placeholder="Add any extra details"
+                    className="mt-2 w-full rounded-xl border border-slate-800/80 bg-slate-950/80 px-4 py-3 text-sm"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                >
+                  Save expense
+                </button>
+              </form>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">
+                How it works
+              </h3>
+              <ol className="mt-4 space-y-3 text-sm text-slate-300">
+                <li>
+                  <span className="font-semibold text-emerald-200">1. Add payments:</span> record every
+                  GPay, PhonePe, or cash transaction in the form above (or sync GPay history).
+                </li>
+                <li>
+                  <span className="font-semibold text-emerald-200">2. Filter quickly:</span> use
+                  method and category filters to match statements or budgets.
+                </li>
+                <li>
+                  <span className="font-semibold text-emerald-200">3. Review totals:</span> check the
+                  payment mix and total spent to stay on top of your month.
+                </li>
+              </ol>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-900/70 p-6">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">
+                Tips
+              </h3>
+              <ul className="mt-4 space-y-3 text-sm text-slate-300">
+                <li>Capture cash payments instantly to keep totals accurate.</li>
+                <li>Filter by method to reconcile GPay and PhonePe statements.</li>
+                <li>Use notes for recurring subscriptions or reminders.</li>
+              </ul>
+            </div>
+          </aside>
+        </main>
+      )}
     </div>
   );
 }
